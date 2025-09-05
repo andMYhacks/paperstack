@@ -15,6 +15,10 @@ from openai_utils import (
     get_openai_client,
     summarize_abstract_with_openai,
 )
+from claude_utils import (
+    get_claude_client,
+    summarize_abstract_with_claude,
+)
 from scholar_utils import get_recommended_arxiv_ids_from_semantic_scholar
 
 ARXIV_SEARCH = """\
@@ -44,6 +48,18 @@ async def main():
         default=os.environ.get("OPENAI_API_TOKEN"),
         help="OpenAI token",
     )
+    parser.add_argument(
+        "--claude-token",
+        type=str,
+        default=os.environ.get("CLAUDE_API_KEY"),
+        help="Claude API token",
+    )
+    parser.add_argument(
+        "--use-claude",
+        action="store_true",
+        default=False,
+        help="Use Claude API instead of OpenAI",
+    )
     parser.add_argument("--arxiv-search-query", type=str, default=ARXIV_SEARCH)
     parser.add_argument("--search-arxiv", action="store_true", default=False)
     parser.add_argument("--search-semantic-scholar", action="store_true", default=False)
@@ -52,7 +68,13 @@ async def main():
     print("[+] Paperstack")
 
     notion_client = get_notion_client(args.notion_token)
-    openai_client = get_openai_client(args.openai_token)
+    
+    if args.use_claude:
+        ai_client = get_claude_client(args.claude_token)
+        ai_name = "Claude"
+    else:
+        ai_client = get_openai_client(args.openai_token)
+        ai_name = "OpenAI"
 
     print(f" |- Getting papers from Notion [{args.database_id}]")
     papers = await get_papers_from_notion(notion_client, args.database_id)
@@ -90,25 +112,30 @@ async def main():
             print(" |- All papers have been explored")
 
     if not all([paper.summary for paper in papers]):
-        print(" |- Building summaries with OpenAI")
+        print(f" |- Building summaries with {ai_name}")
         for paper in [p for p in papers if not p.summary and p.abstract]:
             print(f"    |- {paper.title[:50]}...")
-            paper.summary = summarize_abstract_with_openai(
-                openai_client, paper.abstract
-            )
+            if args.use_claude:
+                paper.summary = summarize_abstract_with_claude(
+                    ai_client, paper.abstract
+                )
+            else:
+                paper.summary = summarize_abstract_with_openai(
+                    ai_client, paper.abstract
+                )
 
     if not all([paper.focus for paper in papers]):
-        print(" |- Assigning focus labels with OpenAI")
+        print(f" |- Assigning focus labels with {ai_name}")
         for paper in [p for p in papers if not p.focus and (p.abstract or p.summary)]:
             reference = paper.abstract or paper.summary
-            paper.focus = get_focus_label_from_abstract(openai_client, reference)
+            paper.focus = get_focus_label_from_abstract(ai_client, reference)
             print(f"    |- {paper.focus}")
 
     if not all([paper.attack_type for paper in papers]):
-        print(" |- Assigning attack types with OpenAI")
+        print(f" |- Assigning attack types with {ai_name}")
         for paper in [p for p in papers if not p.attack_type and (p.abstract or p.summary)]:
             reference = paper.abstract or paper.summary
-            paper.attack_type = get_attack_type_from_abstract(openai_client, reference)
+            paper.attack_type = get_attack_type_from_abstract(ai_client, reference)
             print(f"    |- {paper.attack_type}")
             
     to_write = [p for p in papers if p.has_changed()]
