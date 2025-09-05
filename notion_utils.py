@@ -22,7 +22,11 @@ def get_notion_client(token: str) -> NotionClient:
     return NotionClient(auth=token, timeout_ms=60000)  # 60-second timeout
 
 
-async def get_papers_from_notion(client: NotionClient, database_id: str, *, max: int | None = None) -> list[Paper]:
+async def get_papers_from_notion(client: NotionClient, database_id: str, *, max: int | None = None, debug: bool = False) -> list[Paper]:
+    if debug:
+        print(f"    |- Debug: Querying database with ID: '{database_id}'")
+        print(f"    |- Debug: Database ID length: {len(database_id) if database_id else 0}")
+    
     retries = 0
     results = []
 
