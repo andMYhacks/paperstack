@@ -240,16 +240,26 @@ async def main():
         print(" |- Filling in missing data from arXiv")
         papers = fill_papers_with_arxiv(papers)
 
+    if args.debug:
+        print(f" |- Debug: args.search_arxiv = {args.search_arxiv}")
+        print(f" |- Debug: existing_paper_count = {existing_paper_count}")
+        print(f" |- Debug: args.max_papers = {args.max_papers}")
+    
     if args.search_arxiv:
         print(" |- Searching arXiv for new papers")
         existing_titles = [paper.title for paper in papers]
         
-        # Calculate how many new papers we can add (excluding existing Notion papers)
+        # Set search limit based on max_papers (independent of existing Notion papers)
         if args.max_papers:
-            arxiv_limit = min(500, args.max_papers * 2)  # Search more to account for duplicates
-            print(f"    |- Can add up to {args.max_papers} new papers from arXiv")
+            # For small limits, search much more broadly to account for duplicates
+            if args.max_papers <= 5:
+                arxiv_limit = min(500, args.max_papers * 50)  # Much broader search for small limits
+            else:
+                arxiv_limit = min(500, args.max_papers * 5)   # Moderate search for larger limits
+            print(f"    |- Will add up to {args.max_papers} new papers from arXiv (searching {arxiv_limit} papers to find unique ones)")
         else:
             arxiv_limit = 500
+            print(f"    |- Searching for new papers (no limit)")
         
         # Use the new error-handling search function
         searched_papers = search_arxiv_with_retry(
@@ -259,18 +269,27 @@ async def main():
         )
         
         new_papers_count = 0
+        duplicate_count = 0
+        
         for searched_paper in searched_papers:
             if searched_paper.title not in existing_titles:
                 # Stop if we've reached the limit for NEW papers (before adding this one)
-                if args.max_papers and new_papers_count > args.max_papers:
+                if args.max_papers and new_papers_count >= args.max_papers:
                     break
                     
                 print(f"    |- {searched_paper.title[:50]}...")
                 papers.append(searched_paper)
                 new_papers_count += 1
+            else:
+                duplicate_count += 1
+        
+        if args.debug:
+            print(f"    |- Debug: Found {len(searched_papers)} total papers, {duplicate_count} duplicates, {new_papers_count} unique")
         
         limit_msg = f" (limited to {args.max_papers} new papers)" if args.max_papers and new_papers_count >= args.max_papers else ""
         print(f"    |- Added {new_papers_count} new papers from arXiv{limit_msg}")
+    else:
+        print(f" |- Skipping arXiv search (args.search_arxiv = {args.search_arxiv})")
 
     if args.search_semantic_scholar:
         to_explore = [p for p in papers if not p.explored]
@@ -282,23 +301,13 @@ async def main():
         else:
             print(" |- All papers have been explored")
 
-    if not all([paper.summary for paper in papers]):
-        papers_to_summarize = [p for p in papers if not p.summary and p.abstract]
+    # Only process NEW arXiv papers (not existing Notion papers)
+    new_papers_needing_summary = [p for p in papers[existing_paper_count:] if not p.summary and p.abstract]
+    
+    if new_papers_needing_summary:
+        print(f" |- Building summaries with {ai_name} for {len(new_papers_needing_summary)} new arXiv papers")
         
-        # Separate existing Notion papers from new arXiv papers
-        existing_papers_to_summarize = papers_to_summarize[:existing_paper_count]
-        new_papers_to_summarize = papers_to_summarize[existing_paper_count:]
-        
-        # Apply limit only to new papers, process all existing papers
-        if args.max_papers and len(new_papers_to_summarize) > args.max_papers:
-            new_papers_to_summarize = new_papers_to_summarize[:args.max_papers]
-            print(f" |- Building summaries with {ai_name} ({len(existing_papers_to_summarize)} existing + {len(new_papers_to_summarize)} new papers, limited)")
-        else:
-            print(f" |- Building summaries with {ai_name} ({len(existing_papers_to_summarize)} existing + {len(new_papers_to_summarize)} new papers)")
-        
-        # Process all papers (existing + limited new)
-        final_papers_to_summarize = existing_papers_to_summarize + new_papers_to_summarize
-        for paper in final_papers_to_summarize:
+        for paper in new_papers_needing_summary:
             print(f"    |- {paper.title[:50]}...")
             if args.use_claude:
                 paper.summary = summarize_abstract_with_claude(
@@ -309,23 +318,13 @@ async def main():
                     ai_client, paper.abstract
                 )
 
-    if not all([paper.focus for paper in papers]):
-        papers_to_label = [p for p in papers if not p.focus and (p.abstract or p.summary)]
+    # Only process NEW arXiv papers (not existing Notion papers)
+    new_papers_needing_focus = [p for p in papers[existing_paper_count:] if not p.focus and (p.abstract or p.summary)]
+    
+    if new_papers_needing_focus:
+        print(f" |- Assigning focus labels with {ai_name} for {len(new_papers_needing_focus)} new arXiv papers")
         
-        # Separate existing Notion papers from new arXiv papers
-        existing_papers_to_label = papers_to_label[:existing_paper_count]
-        new_papers_to_label = papers_to_label[existing_paper_count:]
-        
-        # Apply limit only to new papers, process all existing papers
-        if args.max_papers and len(new_papers_to_label) > args.max_papers:
-            new_papers_to_label = new_papers_to_label[:args.max_papers]
-            print(f" |- Assigning focus labels with {ai_name} ({len(existing_papers_to_label)} existing + {len(new_papers_to_label)} new papers, limited)")
-        else:
-            print(f" |- Assigning focus labels with {ai_name} ({len(existing_papers_to_label)} existing + {len(new_papers_to_label)} new papers)")
-        
-        # Process all papers (existing + limited new)
-        final_papers_to_label = existing_papers_to_label + new_papers_to_label
-        for paper in final_papers_to_label:
+        for paper in new_papers_needing_focus:
             reference = paper.abstract or paper.summary
             if args.use_claude:
                 paper.focus = get_focus_label_from_abstract_claude(ai_client, reference)
@@ -333,23 +332,13 @@ async def main():
                 paper.focus = get_focus_label_from_abstract(ai_client, reference)
             print(f"    |- {paper.focus}")
 
-    if not all([paper.attack_type for paper in papers]):
-        papers_to_classify = [p for p in papers if not p.attack_type and (p.abstract or p.summary)]
+    # Only process NEW arXiv papers (not existing Notion papers)
+    new_papers_needing_attack_type = [p for p in papers[existing_paper_count:] if not p.attack_type and (p.abstract or p.summary)]
+    
+    if new_papers_needing_attack_type:
+        print(f" |- Assigning attack types with {ai_name} for {len(new_papers_needing_attack_type)} new arXiv papers")
         
-        # Separate existing Notion papers from new arXiv papers
-        existing_papers_to_classify = papers_to_classify[:existing_paper_count]
-        new_papers_to_classify = papers_to_classify[existing_paper_count:]
-        
-        # Apply limit only to new papers, process all existing papers
-        if args.max_papers and len(new_papers_to_classify) > args.max_papers:
-            new_papers_to_classify = new_papers_to_classify[:args.max_papers]
-            print(f" |- Assigning attack types with {ai_name} ({len(existing_papers_to_classify)} existing + {len(new_papers_to_classify)} new papers, limited)")
-        else:
-            print(f" |- Assigning attack types with {ai_name} ({len(existing_papers_to_classify)} existing + {len(new_papers_to_classify)} new papers)")
-        
-        # Process all papers (existing + limited new)
-        final_papers_to_classify = existing_papers_to_classify + new_papers_to_classify
-        for paper in final_papers_to_classify:
+        for paper in new_papers_needing_attack_type:
             reference = paper.abstract or paper.summary
             if args.use_claude:
                 paper.attack_type = get_attack_type_from_abstract_claude(ai_client, reference)
