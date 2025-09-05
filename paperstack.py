@@ -138,7 +138,7 @@ async def main():
     parser.add_argument(
         "--database-id",
         type=str,
-        default=os.environ.get("DATABASE_ID"),
+        default=os.environ.get("NOTION_DATABASE_ID"),
         help="Notion database id",
     )
     parser.add_argument(
@@ -180,13 +180,13 @@ async def main():
     
     # Debug environment variables (only if --debug flag is set)
     if args.debug:
-        print(f" |- Debug: DATABASE_ID from env: {os.environ.get('DATABASE_ID')}")
+        print(f" |- Debug: NOTION_DATABASE_ID from env: {os.environ.get('NOTION_DATABASE_ID')}")
         print(f" |- Debug: args.database_id: {args.database_id}")
         print(f" |- Debug: NOTION_TOKEN from env: {os.environ.get('NOTION_TOKEN')[:10] if os.environ.get('NOTION_TOKEN') else None}...")
     
     if not args.database_id:
         print("❌ Error: No database ID provided!")
-        print("   Set DATABASE_ID environment variable or use --database-id")
+        print("   Set NOTION_DATABASE_ID environment variable or use --database-id")
         return
     
     if not args.notion_token:
@@ -260,11 +260,11 @@ async def main():
         
         new_papers_count = 0
         for searched_paper in searched_papers:
-            # Stop if we've reached the limit for NEW papers
-            if args.max_papers and new_papers_count >= args.max_papers:
-                break
-                
             if searched_paper.title not in existing_titles:
+                # Stop if we've reached the limit for NEW papers (before adding this one)
+                if args.max_papers and new_papers_count > args.max_papers:
+                    break
+                    
                 print(f"    |- {searched_paper.title[:50]}...")
                 papers.append(searched_paper)
                 new_papers_count += 1

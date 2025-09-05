@@ -108,8 +108,8 @@ async def main():
     parser.add_argument(
         "--database-id", 
         type=str,
-        default=os.environ.get("DATABASE_ID"),
-        help="Notion database ID (default: DATABASE_ID env var)"
+        default=os.environ.get("NOTION_DATABASE_ID"),
+        help="Notion database ID (default: NOTION_DATABASE_ID env var)"
     )
     parser.add_argument(
         "--claude-token",
@@ -158,7 +158,7 @@ async def main():
         parser.error("Notion token required (set NOTION_TOKEN env var or use --notion-token)")
         
     if not args.database_id:
-        parser.error("Database ID required (set DATABASE_ID env var or use --database-id)")
+        parser.error("Database ID required (set NOTION_DATABASE_ID env var or use --database-id)")
         
     if not args.skip_analysis and not args.claude_token:
         parser.error("Claude token required for analysis (set CLAUDE_API_KEY env var or use --claude-token)")
