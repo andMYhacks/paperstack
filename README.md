@@ -23,3 +23,13 @@ OPENAI_API_TOKEN
 ```
 
 Hack away!
+
+----------
+
+## New functionality!
+
+This fork includes a new `--use-claude` command which requires a `CLAUDE_API_KEY` value stored in a `.env` file in the root directory (along with your `DATABASE_ID` and `NOTION_TOKEN` values).
+
+Likewise, this fork of the project now supports a `--max-papers` command, which can be used to determine how many papers from arXiv should be queried, summarized, and categorized accordingly. 
+
+Also included with this fork are several files from Anthropic's `claude-code` repository to ensure a properly segmented "devcontainer" setup. These files are located in the `.devcontainer`,`Script`, and `scripts` directories.
