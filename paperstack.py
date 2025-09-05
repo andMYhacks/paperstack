@@ -169,7 +169,7 @@ async def main():
         "--max-papers",
         type=int,
         default=None,
-        help="Maximum number of papers to retrieve and process (applies to Notion, arXiv, and Claude processing)",
+        help="Maximum number of NEW papers to retrieve from arXiv and process with Claude (does not limit existing Notion papers)",
     )
     parser.add_argument("--arxiv-search-query", type=str, default=ARXIV_SEARCH)
     parser.add_argument("--search-arxiv", action="store_true", default=False)
@@ -217,17 +217,17 @@ async def main():
         
         # Show limit information for Claude workflow
         if args.max_papers:
-            print(f" |- Paper processing limit: {args.max_papers} papers maximum")
+            print(f" |- New paper limit: {args.max_papers} new papers maximum (existing Notion papers unlimited)")
     else:
         ai_client = get_openai_client(args.openai_token)
         ai_name = "OpenAI"
 
     print(f" |- Getting papers from Notion database [{formatted_db_id}]")
-    papers = await get_papers_from_notion(notion_client, formatted_db_id, max=args.max_papers, debug=args.debug)
-    if args.max_papers and len(papers) >= args.max_papers:
-        print(f"    |- {len(papers)} existing papers (limited to {args.max_papers})")
-    else:
-        print(f"    |- {len(papers)} existing papers")
+    papers = await get_papers_from_notion(notion_client, formatted_db_id, debug=args.debug)
+    print(f"    |- {len(papers)} existing papers")
+    
+    # Track existing vs new papers for limit calculations
+    existing_paper_count = len(papers)
 
     for p in papers:
         if p.published < datetime.fromisoformat("2024-07-01 00:00:00+00:00"):
@@ -244,39 +244,33 @@ async def main():
         print(" |- Searching arXiv for new papers")
         existing_titles = [paper.title for paper in papers]
         
-        # Calculate how many more papers we can add
-        current_paper_count = len(papers)
+        # Calculate how many new papers we can add (excluding existing Notion papers)
         if args.max_papers:
-            remaining_slots = max(0, args.max_papers - current_paper_count)
-            if remaining_slots == 0:
-                print(f"    |- Already at paper limit ({args.max_papers}), skipping arXiv search")
-            else:
-                arxiv_limit = min(500, remaining_slots * 2)  # Search more to account for duplicates
-                print(f"    |- Can add up to {remaining_slots} more papers")
+            arxiv_limit = min(500, args.max_papers * 2)  # Search more to account for duplicates
+            print(f"    |- Can add up to {args.max_papers} new papers from arXiv")
         else:
             arxiv_limit = 500
         
-        if not args.max_papers or remaining_slots > 0:
-            # Use the new error-handling search function
-            searched_papers = search_arxiv_with_retry(
-                args.arxiv_search_query, 
-                max_results=arxiv_limit, 
-                debug=args.debug
-            )
-            
-            new_papers_count = 0
-            for searched_paper in searched_papers:
-                # Stop if we've reached the limit
-                if args.max_papers and len(papers) >= args.max_papers:
-                    break
-                    
-                if searched_paper.title not in existing_titles:
-                    print(f"    |- {searched_paper.title[:50]}...")
-                    papers.append(searched_paper)
-                    new_papers_count += 1
-            
-            limit_msg = f" (limited by --max-papers)" if args.max_papers and len(papers) >= args.max_papers else ""
-            print(f"    |- Added {new_papers_count} new papers from arXiv{limit_msg}")
+        # Use the new error-handling search function
+        searched_papers = search_arxiv_with_retry(
+            args.arxiv_search_query, 
+            max_results=arxiv_limit, 
+            debug=args.debug
+        )
+        
+        new_papers_count = 0
+        for searched_paper in searched_papers:
+            # Stop if we've reached the limit for NEW papers
+            if args.max_papers and new_papers_count >= args.max_papers:
+                break
+                
+            if searched_paper.title not in existing_titles:
+                print(f"    |- {searched_paper.title[:50]}...")
+                papers.append(searched_paper)
+                new_papers_count += 1
+        
+        limit_msg = f" (limited to {args.max_papers} new papers)" if args.max_papers and new_papers_count >= args.max_papers else ""
+        print(f"    |- Added {new_papers_count} new papers from arXiv{limit_msg}")
 
     if args.search_semantic_scholar:
         to_explore = [p for p in papers if not p.explored]
@@ -291,14 +285,20 @@ async def main():
     if not all([paper.summary for paper in papers]):
         papers_to_summarize = [p for p in papers if not p.summary and p.abstract]
         
-        # Apply limit to Claude processing
-        if args.max_papers and len(papers_to_summarize) > args.max_papers:
-            papers_to_summarize = papers_to_summarize[:args.max_papers]
-            print(f" |- Building summaries with {ai_name} (limited to {args.max_papers} papers)")
-        else:
-            print(f" |- Building summaries with {ai_name}")
+        # Separate existing Notion papers from new arXiv papers
+        existing_papers_to_summarize = papers_to_summarize[:existing_paper_count]
+        new_papers_to_summarize = papers_to_summarize[existing_paper_count:]
         
-        for paper in papers_to_summarize:
+        # Apply limit only to new papers, process all existing papers
+        if args.max_papers and len(new_papers_to_summarize) > args.max_papers:
+            new_papers_to_summarize = new_papers_to_summarize[:args.max_papers]
+            print(f" |- Building summaries with {ai_name} ({len(existing_papers_to_summarize)} existing + {len(new_papers_to_summarize)} new papers, limited)")
+        else:
+            print(f" |- Building summaries with {ai_name} ({len(existing_papers_to_summarize)} existing + {len(new_papers_to_summarize)} new papers)")
+        
+        # Process all papers (existing + limited new)
+        final_papers_to_summarize = existing_papers_to_summarize + new_papers_to_summarize
+        for paper in final_papers_to_summarize:
             print(f"    |- {paper.title[:50]}...")
             if args.use_claude:
                 paper.summary = summarize_abstract_with_claude(
@@ -312,14 +312,20 @@ async def main():
     if not all([paper.focus for paper in papers]):
         papers_to_label = [p for p in papers if not p.focus and (p.abstract or p.summary)]
         
-        # Apply limit to Claude processing
-        if args.max_papers and len(papers_to_label) > args.max_papers:
-            papers_to_label = papers_to_label[:args.max_papers]
-            print(f" |- Assigning focus labels with {ai_name} (limited to {args.max_papers} papers)")
-        else:
-            print(f" |- Assigning focus labels with {ai_name}")
+        # Separate existing Notion papers from new arXiv papers
+        existing_papers_to_label = papers_to_label[:existing_paper_count]
+        new_papers_to_label = papers_to_label[existing_paper_count:]
         
-        for paper in papers_to_label:
+        # Apply limit only to new papers, process all existing papers
+        if args.max_papers and len(new_papers_to_label) > args.max_papers:
+            new_papers_to_label = new_papers_to_label[:args.max_papers]
+            print(f" |- Assigning focus labels with {ai_name} ({len(existing_papers_to_label)} existing + {len(new_papers_to_label)} new papers, limited)")
+        else:
+            print(f" |- Assigning focus labels with {ai_name} ({len(existing_papers_to_label)} existing + {len(new_papers_to_label)} new papers)")
+        
+        # Process all papers (existing + limited new)
+        final_papers_to_label = existing_papers_to_label + new_papers_to_label
+        for paper in final_papers_to_label:
             reference = paper.abstract or paper.summary
             if args.use_claude:
                 paper.focus = get_focus_label_from_abstract_claude(ai_client, reference)
@@ -330,14 +336,20 @@ async def main():
     if not all([paper.attack_type for paper in papers]):
         papers_to_classify = [p for p in papers if not p.attack_type and (p.abstract or p.summary)]
         
-        # Apply limit to Claude processing
-        if args.max_papers and len(papers_to_classify) > args.max_papers:
-            papers_to_classify = papers_to_classify[:args.max_papers]
-            print(f" |- Assigning attack types with {ai_name} (limited to {args.max_papers} papers)")
-        else:
-            print(f" |- Assigning attack types with {ai_name}")
+        # Separate existing Notion papers from new arXiv papers
+        existing_papers_to_classify = papers_to_classify[:existing_paper_count]
+        new_papers_to_classify = papers_to_classify[existing_paper_count:]
         
-        for paper in papers_to_classify:
+        # Apply limit only to new papers, process all existing papers
+        if args.max_papers and len(new_papers_to_classify) > args.max_papers:
+            new_papers_to_classify = new_papers_to_classify[:args.max_papers]
+            print(f" |- Assigning attack types with {ai_name} ({len(existing_papers_to_classify)} existing + {len(new_papers_to_classify)} new papers, limited)")
+        else:
+            print(f" |- Assigning attack types with {ai_name} ({len(existing_papers_to_classify)} existing + {len(new_papers_to_classify)} new papers)")
+        
+        # Process all papers (existing + limited new)
+        final_papers_to_classify = existing_papers_to_classify + new_papers_to_classify
+        for paper in final_papers_to_classify:
             reference = paper.abstract or paper.summary
             if args.use_claude:
                 paper.attack_type = get_attack_type_from_abstract_claude(ai_client, reference)
