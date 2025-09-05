@@ -127,53 +127,85 @@ ARXIV_SEARCH = """\
 
 
 async def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Paperstack: Automated academic paper research workflow with Notion integration and AI analysis",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic Claude workflow (retrieves existing papers + searches arXiv + processes with Claude)
+  python paperstack.py --use-claude
+  
+  # Limit new papers and enable debugging
+  python paperstack.py --use-claude --max-papers 5 --debug
+  
+  # Use OpenAI with specific search
+  python paperstack.py --search-arxiv --arxiv-search-query "machine learning security"
+  
+  # Environment variables (can be set in .env file):
+  NOTION_TOKEN, NOTION_DATABASE_ID, CLAUDE_API_KEY, OPENAI_API_TOKEN
+        """
+    )
 
     parser.add_argument(
         "--notion-token",
         type=str,
         default=os.environ.get("NOTION_TOKEN"),
-        help="Notion token",
+        help="Notion API token (default: NOTION_TOKEN env var)",
     )
     parser.add_argument(
         "--database-id",
         type=str,
         default=os.environ.get("NOTION_DATABASE_ID"),
-        help="Notion database id",
+        help="Notion database ID (default: NOTION_DATABASE_ID env var)",
     )
     parser.add_argument(
         "--openai-token",
         type=str,
         default=os.environ.get("OPENAI_API_TOKEN"),
-        help="OpenAI token",
+        help="OpenAI API token (default: OPENAI_API_TOKEN env var)",
     )
     parser.add_argument(
         "--claude-token",
         type=str,
         default=os.environ.get("CLAUDE_API_KEY"),
-        help="Claude API token",
+        help="Claude API token (default: CLAUDE_API_KEY env var)",
     )
     parser.add_argument(
         "--use-claude",
         action="store_true",
         default=False,
-        help="Use Claude API instead of OpenAI",
+        help="Use Claude API for analysis instead of OpenAI (automatically enables --search-arxiv)",
     )
     parser.add_argument(
         "--debug",
         action="store_true",
         default=False,
-        help="Enable debug output",
+        help="Enable detailed debug output and logging",
     )
     parser.add_argument(
         "--max-papers",
         type=int,
         default=None,
-        help="Maximum number of NEW papers to retrieve from arXiv and process with Claude (does not limit existing Notion papers)",
+        help="Maximum number of NEW papers to retrieve from arXiv and process (does not limit existing Notion papers)",
     )
-    parser.add_argument("--arxiv-search-query", type=str, default=ARXIV_SEARCH)
-    parser.add_argument("--search-arxiv", action="store_true", default=False)
-    parser.add_argument("--search-semantic-scholar", action="store_true", default=False)
+    parser.add_argument(
+        "--arxiv-search-query", 
+        type=str, 
+        default=ARXIV_SEARCH,
+        help="Custom arXiv search query (default: AI security terms)"
+    )
+    parser.add_argument(
+        "--search-arxiv", 
+        action="store_true", 
+        default=False,
+        help="Search arXiv for new papers to add to database"
+    )
+    parser.add_argument(
+        "--search-semantic-scholar", 
+        action="store_true", 
+        default=False,
+        help="Search Semantic Scholar for related papers"
+    )
 
     args = parser.parse_args()
     print("[+] Paperstack")
@@ -187,17 +219,17 @@ async def main():
     if not args.database_id:
         print("❌ Error: No database ID provided!")
         print("   Set NOTION_DATABASE_ID environment variable or use --database-id")
-        return
+        return 1
     
     if not args.notion_token:
         print("❌ Error: No Notion token provided!")
         print("   Set NOTION_TOKEN environment variable or use --notion-token")
-        return
+        return 1
     
     # Validate max-papers argument
     if args.max_papers is not None and args.max_papers <= 0:
         print("❌ Error: --max-papers must be a positive integer")
-        return
+        return 1
     
     # Format database ID properly
     formatted_db_id = format_notion_id(args.database_id)
@@ -223,11 +255,17 @@ async def main():
         ai_name = "OpenAI"
 
     print(f" |- Getting papers from Notion database [{formatted_db_id}]")
-    papers = await get_papers_from_notion(notion_client, formatted_db_id, debug=args.debug)
-    print(f"    |- {len(papers)} existing papers")
-    
-    # Track existing vs new papers for limit calculations
-    existing_paper_count = len(papers)
+    try:
+        papers = await get_papers_from_notion(notion_client, formatted_db_id, debug=args.debug)
+        print(f"    |- {len(papers)} existing papers")
+        
+        # Track existing vs new papers for limit calculations
+        existing_paper_count = len(papers)
+    except Exception as e:
+        print(f"    |- Error retrieving papers from Notion: {e}")
+        print("    |- Continuing with empty paper list...")
+        papers = []
+        existing_paper_count = 0
 
     for p in papers:
         if p.published < datetime.fromisoformat("2024-07-01 00:00:00+00:00"):
@@ -349,10 +387,74 @@ async def main():
     to_write = [p for p in papers if p.has_changed()]
     if to_write:
         print(f" |- Writing {len(to_write)} updates back to Notion")
-        await write_papers_to_notion(notion_client, formatted_db_id, to_write)
+        try:
+            await write_papers_to_notion(notion_client, formatted_db_id, to_write)
+            print("    |- Successfully written to Notion")
+        except Exception as e:
+            print(f"    |- Error writing to Notion: {e}")
+            return 1
+    else:
+        print(" |- No changes to write back to Notion")
 
     print("[+] Done!")
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+    
+    # Handle --help explicitly for clean exit
+    if "--help" in sys.argv or "-h" in sys.argv:
+        try:
+            # Create parser and show help
+            parser = argparse.ArgumentParser(
+                description="Paperstack: Automated academic paper research workflow with Notion integration and AI analysis",
+                formatter_class=argparse.RawDescriptionHelpFormatter,
+                epilog="""
+Examples:
+  # Basic Claude workflow (retrieves existing papers + searches arXiv + processes with Claude)
+  python paperstack.py --use-claude
+  
+  # Limit new papers and enable debugging
+  python paperstack.py --use-claude --max-papers 5 --debug
+  
+  # Use OpenAI with specific search
+  python paperstack.py --search-arxiv --arxiv-search-query "machine learning security"
+  
+  # Environment variables (can be set in .env file):
+  NOTION_TOKEN, NOTION_DATABASE_ID, CLAUDE_API_KEY, OPENAI_API_TOKEN
+                """
+            )
+            
+            parser.add_argument("--notion-token", type=str, help="Notion API token (default: NOTION_TOKEN env var)")
+            parser.add_argument("--database-id", type=str, help="Notion database ID (default: NOTION_DATABASE_ID env var)")
+            parser.add_argument("--openai-token", type=str, help="OpenAI API token (default: OPENAI_API_TOKEN env var)")
+            parser.add_argument("--claude-token", type=str, help="Claude API token (default: CLAUDE_API_KEY env var)")
+            parser.add_argument("--use-claude", action="store_true", help="Use Claude API for analysis instead of OpenAI (automatically enables --search-arxiv)")
+            parser.add_argument("--debug", action="store_true", help="Enable detailed debug output and logging")
+            parser.add_argument("--max-papers", type=int, help="Maximum number of NEW papers to retrieve from arXiv and process (does not limit existing Notion papers)")
+            parser.add_argument("--arxiv-search-query", type=str, help="Custom arXiv search query (default: AI security terms)")
+            parser.add_argument("--search-arxiv", action="store_true", help="Search arXiv for new papers to add to database")
+            parser.add_argument("--search-semantic-scholar", action="store_true", help="Search Semantic Scholar for related papers")
+            
+            parser.print_help()
+            sys.exit(0)
+        except Exception:
+            # Fallback to letting argparse handle it normally
+            pass
+    
+    # Run the main application
+    try:
+        exit_code = asyncio.run(main())
+        if exit_code and exit_code != 0:
+            sys.exit(exit_code)
+    except KeyboardInterrupt:
+        print("\n[!] Interrupted by user")
+        sys.exit(130)  # Standard exit code for SIGINT
+    except Exception as e:
+        print(f"[!] Unexpected error: {e}")
+        if hasattr(e, '__traceback__'):
+            import traceback
+            print("\nFull traceback:")
+            traceback.print_exc()
+        sys.exit(1)
