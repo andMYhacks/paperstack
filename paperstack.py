@@ -78,7 +78,12 @@ async def main():
 
     print(f" |- Getting papers from Notion [{args.database_id}]")
     papers = await get_papers_from_notion(notion_client, args.database_id)
-    print(f"    |- {len(papers)} existing papers")
+    
+    if papers is None:
+        print("    |- No papers returned from Notion, skipping...")
+        papers = []
+    else:
+        print(f"    |- {len(papers)} existing papers")
 
     for p in papers:
         if p.published < datetime.fromisoformat("2024-07-01 00:00:00+00:00"):
